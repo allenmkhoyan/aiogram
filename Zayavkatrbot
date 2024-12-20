@@ -1,0 +1,108 @@
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+import sqlite3
+
+# Настройки
+API_TOKEN = "ваш_токен_от_BotFather"
+
+# Инициализация бота
+bot = Bot(token=API_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
+
+# База данных
+conn = sqlite3.connect("orders.db")
+cursor = conn.cursor()
+
+# Создание таблицы, если не существует
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_name TEXT,
+    vs INTEGER,
+    ps INTEGER,
+    borodinsky INTEGER
+)
+""")
+conn.commit()
+
+# Состояния для заказа
+class OrderState(StatesGroup):
+    shop_name = State()
+    vs = State()
+    ps = State()
+    borodinsky = State()
+
+# Команда /start
+@dp.message_handler(commands=["start"])
+async def start_command(message: types.Message):
+    await message.answer("Добро пожаловать! Для оформления заказа напишите название вашего магазина:")
+    await OrderState.shop_name.set()
+
+# Обработка названия магазина
+@dp.message_handler(state=OrderState.shop_name)
+async def get_shop_name(message: types.Message, state: FSMContext):
+    await state.update_data(shop_name=message.text)
+    await message.answer("Укажите количество хлеба В/С:")
+    await OrderState.vs.set()
+
+# Обработка количества В/С
+@dp.message_handler(state=OrderState.vs)
+async def get_vs_quantity(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, введите число.")
+        return
+    await state.update_data(vs=int(message.text))
+    await message.answer("Укажите количество хлеба П/С:")
+    await OrderState.ps.set()
+
+# Обработка количества П/С
+@dp.message_handler(state=OrderState.ps)
+async def get_ps_quantity(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, введите число.")
+        return
+    await state.update_data(ps=int(message.text))
+    await message.answer("Укажите количество хлеба Бородинский:")
+    await OrderState.borodinsky.set()
+
+# Обработка количества Бородинский
+@dp.message_handler(state=OrderState.borodinsky)
+async def get_borodinsky_quantity(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, введите число.")
+        return
+    await state.update_data(borodinsky=int(message.text))
+
+    # Сохранение данных
+    data = await state.get_data()
+    cursor.execute("""
+    INSERT INTO orders (shop_name, vs, ps, borodinsky)
+    VALUES (?, ?, ?, ?)
+    """, (data["shop_name"], data["vs"], data["ps"], data["borodinsky"]))
+    conn.commit()
+
+    await message.answer(f"Заказ принят!\n\nМагазин: {data['shop_name']}\nВ/С: {data['vs']} шт.\nП/С: {data['ps']} шт.\nБородинский: {data['borodinsky']} шт.")
+    await state.finish()
+
+# Команда /report для отображения всех заказов
+@dp.message_handler(commands=["report"])
+async def report_command(message: types.Message):
+    cursor.execute("SELECT * FROM orders")
+    orders = cursor.fetchall()
+
+    if not orders:
+        await message.answer("На данный момент нет заказов.")
+        return
+
+    report = "Список заказов:\n\n"
+    for order in orders:
+        report += f"Магазин: {order[1]}\nВ/С: {order[2]} шт.\nП/С: {order[3]} шт.\nБородинский: {order[4]} шт.\n\n"
+
+    await message.answer(report)
+
+# Запуск бота
+if __name__ == "__main__":
+    executor.start_polling(dp, skip_updates=True)
